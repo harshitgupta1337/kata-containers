@@ -560,28 +560,17 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 	}
 
 	// Create the VM memory config via the constructor to ensure default values are properly assigned
-	clh.vmconfig.Memory = chclient.NewMemoryConfig(int64((utils.MemUnit(clh.config.MemorySize) * utils.MiB).ToBytes()))
-	// Memory config shared is to be enabled when using vhost_user backends, ex. virtio-fs
-	// or when using HugePages.
-	// If such features are disabled, turn off shared memory config.
-	if clh.config.SharedFS == config.NoSharedFS && !clh.config.HugePages {
-		clh.vmconfig.Memory.Shared = func(b bool) *bool { return &b }(false)
-	} else {
-		clh.vmconfig.Memory.Shared = func(b bool) *bool { return &b }(true)
-	}
-	// Enable hugepages if needed
-	clh.vmconfig.Memory.Hugepages = func(b bool) *bool { return &b }(clh.config.HugePages)
-	if !clh.config.ConfidentialGuest {
-		hotplugSize := clh.config.DefaultMaxMemorySize
-		// OpenAPI only supports int64 values
-		clh.vmconfig.Memory.HotplugSize = func(i int64) *int64 { return &i }(int64((utils.MemUnit(hotplugSize) * utils.MiB).ToBytes()))
+	// Set the size to be 0 since we are going to configure actual size via zones
+	clh.vmconfig.Memory = chclient.NewMemoryConfig(0)
 
-		if clh.config.ReclaimGuestFreedMemory {
-			// Create VM with a balloon config so we can enable free page reporting (size of the balloon can be set to zero)
-			clh.vmconfig.Balloon = chclient.NewBalloonConfig(0)
-			// Set the free page reporting flag for ballooning to be true
-			clh.vmconfig.Balloon.SetFreePageReporting(true)
-		}
+	// Set memory to be shared as we are going to be templating
+	clh.vmconfig.Memory.Shared = func(b bool) *bool { return &b }(true)
+
+	memoryZoneConfig := chclient.NewMemoryZoneConfig("mem0", int64((utils.MemUnit(clh.config.MemorySize) * utils.MiB).ToBytes()))
+	memoryZoneConfig.SetShared(true)
+	memoryZoneConfig.SetFile("/dev/shm/app-snapshot/template.mem")
+	clh.vmconfig.Memory.Zones = &[]chclient.MemoryZoneConfig{
+		*memoryZoneConfig,
 	}
 
 	// Set initial amount of cpu's for the virtual machine
