@@ -83,6 +83,8 @@ func GrpcToVMConfig(j *pb.GrpcVMConfig) (*VMConfig, error) {
 }
 
 // NewVM creates a new VM based on provided VMConfig.
+// This function is called only for template VM creation, creation of VM from a template,
+// and from direct factory.
 func NewVM(ctx context.Context, config VMConfig) (*VM, error) {
 	// 1. setup hypervisor
 	hypervisor, err := NewHypervisor(config.HypervisorType)

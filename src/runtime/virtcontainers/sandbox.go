@@ -1540,6 +1540,9 @@ func (s *Sandbox) startVM(ctx context.Context, prestartHookFunc func(context.Con
 		}
 	}
 
+	// This is the code where a fresh clone VM from the factory is obtained.
+	// Then, the sandbox is assigned to the VM, which will trigger the hotplug of all
+	// the devices needed by the sandbox, including the network interfaces.
 	if err := s.network.Run(ctx, func() error {
 		if s.factory != nil {
 			vm, err := s.factory.GetVM(ctx, VMConfig{
