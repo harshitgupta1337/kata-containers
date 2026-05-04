@@ -68,6 +68,7 @@ const (
 const (
 	clhStateCreated = "Created"
 	clhStateRunning = "Running"
+	clhStatePaused  = "Paused"
 )
 
 const (
@@ -118,6 +119,8 @@ type clhClient interface {
 	VmSnapshotPut(ctx context.Context, vmSnapshotConfig chclient.VmSnapshotConfig) (*http.Response, error)
 	// Remove a device from the VM
 	VmRemoveDevicePut(ctx context.Context, vmRemoveDevice chclient.VmRemoveDevice) (*http.Response, error)
+	// Restore VM from a snapshot
+	VmRestorePut(ctx context.Context, restoreConfig chclient.RestoreConfig) (*http.Response, error)
 }
 
 type clhClientApi struct {
@@ -167,6 +170,10 @@ func (c *clhClientApi) VmSnapshotPut(ctx context.Context, vmSnapshotConfig chcli
 
 func (c *clhClientApi) VmRemoveDevicePut(ctx context.Context, vmRemoveDevice chclient.VmRemoveDevice) (*http.Response, error) {
 	return c.ApiInternal.VmRemoveDevicePut(ctx).VmRemoveDevice(vmRemoveDevice).Execute()
+}
+
+func (c *clhClientApi) VmRestorePut(ctx context.Context, restoreConfig chclient.RestoreConfig) (*http.Response, error) {
+	return c.ApiInternal.VmRestorePut(ctx).RestoreConfig(restoreConfig).Execute()
 }
 
 // This is done in order to be able to override such a function as part of
@@ -267,12 +274,14 @@ type CloudHypervisorState struct {
 	PID               int
 	VirtiofsDaemonPid int
 	state             clhState
+	isRestoring       bool
 }
 
 func (s *CloudHypervisorState) reset() {
 	s.PID = 0
 	s.VirtiofsDaemonPid = 0
 	s.state = clhNotReady
+	s.isRestoring = false
 }
 
 type cloudHypervisor struct {
@@ -513,7 +522,7 @@ func getNonUserDefinedKernelParams(rootfstype string, disableNvdimm bool, dax bo
 }
 
 // For cloudHypervisor this call only sets the internal structure up.
-// The VM will be created and started through StartVM().
+// The VM will be created and started through StartVM(), or restored from template if template files exist.
 func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Network, hypervisorConfig *HypervisorConfig) error {
 	clh.ctx = ctx
 
@@ -712,7 +721,43 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 		return err
 	}
 
+	// Check if we should restore from template instead of creating new VM
+	if clh.config.BootFromTemplate && clh.shouldRestoreFromTemplate() {
+		clh.Logger().Info("Template files found, will restore VM instead of creating new")
+		// Mark this as a restore operation for StartVM to use ResumeVM instead
+		clh.state.isRestoring = true
+		return nil
+	}
+
 	return nil
+}
+
+// shouldRestoreFromTemplate checks if template snapshot files exist and we should restore instead of creating new VM
+func (clh *cloudHypervisor) shouldRestoreFromTemplate() bool {
+	// For template restore, we need the snapshot directory to contain the necessary files
+	// The snapshotDir is derived from the MemoryPath directory
+	snapshotDir := filepath.Dir(clh.config.MemoryPath)
+
+	// Check for required template files (config.json and memory file)
+	configFile := filepath.Join(snapshotDir, "config.json")
+	memoryFile := clh.config.MemoryPath
+
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		clh.Logger().WithField("configFile", configFile).Debug("Template config file not found")
+		return false
+	}
+
+	if _, err := os.Stat(memoryFile); os.IsNotExist(err) {
+		clh.Logger().WithField("memoryFile", memoryFile).Debug("Template memory file not found")
+		return false
+	}
+
+	clh.Logger().WithFields(log.Fields{
+		"configFile": configFile,
+		"memoryFile": memoryFile,
+	}).Info("Template files found, can restore VM from template")
+
+	return true
 }
 
 // setupInitdata prepares and attaches the initdata disk if present.
@@ -783,8 +828,15 @@ func (clh *cloudHypervisor) StartVM(ctx context.Context, timeout int) error {
 	ctx, cancel := context.WithTimeout(ctx, bootTimeout*time.Second)
 	defer cancel()
 
-	if err := clh.bootVM(ctx); err != nil {
-		return err
+	// Check if we should restore from template or create new VM
+	if clh.state.isRestoring {
+		if err := clh.restoreVM(ctx); err != nil {
+			return err
+		}
+	} else {
+		if err := clh.bootVM(ctx); err != nil {
+			return err
+		}
 	}
 
 	clh.state.state = clhReady
@@ -1779,6 +1831,63 @@ func (clh *cloudHypervisor) bootVM(ctx context.Context) error {
 		return fmt.Errorf("VM state is not 'Running' after 'BootVM'")
 	}
 
+	return nil
+}
+
+func (clh *cloudHypervisor) restoreVM(ctx context.Context) error {
+	clh.Logger().Info("Restoring VM from template")
+
+	cl := clh.client()
+
+	// Prepare restore configuration
+	snapshotDir := filepath.Dir(clh.config.MemoryPath)
+	sourceURL := "file://" + snapshotDir
+
+	restoreConfig := *chclient.NewRestoreConfig(sourceURL)
+	// Optionally set prefault if needed for performance
+	// restoreConfig.SetPrefault(true)
+
+	clh.Logger().WithField("sourceURL", sourceURL).Debug("Restore configuration")
+
+	// Restore VM from template
+	_, err := cl.VmRestorePut(ctx, restoreConfig)
+	if err != nil {
+		clh.Logger().WithError(err).Error("Failed to restore VM from template")
+		return openAPIClientError(err)
+	}
+
+	// Check VM state after restoration
+	info, err := clh.vmInfo()
+	if err != nil {
+		return err
+	}
+
+	clh.Logger().Debugf("VM state after restore: %#v", info)
+
+	if info.State != clhStatePaused {
+		clh.Logger().Warnf("VM state is '%s' after restore, expected 'Paused'", info.State)
+	}
+
+	// Resume the restored VM
+	clh.Logger().Debug("Resuming restored VM")
+	err = clh.ResumeVM(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Verify final state
+	info, err = clh.vmInfo()
+	if err != nil {
+		return err
+	}
+
+	clh.Logger().Debugf("VM state after resume: %#v", info)
+
+	if info.State != clhStateRunning {
+		return fmt.Errorf("VM state is not 'Running' after resume, got '%s'", info.State)
+	}
+
+	clh.Logger().Info("Successfully restored and resumed VM from template")
 	return nil
 }
 
