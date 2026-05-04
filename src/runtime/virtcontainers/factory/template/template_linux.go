@@ -189,7 +189,7 @@ func (t *template) createFromTemplateVM(ctx context.Context, c vc.VMConfig) (*vc
 	config.HypervisorConfig.BootToBeTemplate = false
 	config.HypervisorConfig.BootFromTemplate = true
 	config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
-	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
+	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state.json"
 	config.HypervisorConfig.SharedPath = c.HypervisorConfig.SharedPath
 	config.HypervisorConfig.VMStorePath = c.HypervisorConfig.VMStorePath
 	config.HypervisorConfig.RunStorePath = c.HypervisorConfig.RunStorePath
@@ -203,6 +203,9 @@ func (t *template) checkTemplateVM() error {
 		return err
 	}
 
-	_, err = os.Stat(t.statePath + "/state")
+	// TODO:the filename state.json is hardcoded.
+	// It is only state.json with CLH. With QEMU is should be state.
+	// Therefore, we need to make this configurable.
+	_, err = os.Stat(t.statePath + "/state.json")
 	return err
 }

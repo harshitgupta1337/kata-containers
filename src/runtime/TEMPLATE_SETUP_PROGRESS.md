@@ -112,3 +112,58 @@ The `PauseVM()` and `SaveVM()` functions in `virtcontainers/clh.go` need to be i
 - Using Cloud Hypervisor's snapshot/restore API
 - Implementing proper state serialization
 - Handling memory file persistence
+
+## Problem 3: msg="fallback to direct factory vm" error="hypervisor config does not match"
+
+When creating a sandbox from a template, this error is thrown in the logs. Due to the error, the template falls back to the `direct` mode of template creation.
+
+The following snippet is where the config check fails: `virtcontainers/factory/factory_linux.go`.
+
+```go
+	err := f.checkConfig(config)
+	if err != nil {
+		f.log().WithError(err).Info("fallback to direct factory vm")
+		return direct.New(ctx, config).GetBaseVM(ctx, config)
+	}
+```
+
+### Root-cause: incomplete implementation of `resetHypervisorConfig` fn. in `virtcontainers/factory/factory_linux.go`
+
+The following fields were not being reset, which caused a config mismatch error.
+
+```
+1. config.HypervisorConfig.SandboxName = ""
+2. config.HypervisorConfig.SandboxNamespace = ""
+// TODO: Check why DefaultMaxVCPUs needs to be reset.
+3. config.HypervisorConfig.DefaultMaxVCPUs = 0
+```
+
+## Problem 4: load vm factory failed, about to create new one
+
+This error is expected. CLH emits VM state as a `state.json` file.
+
+```
+error="stat /run/vc/vm/template/state: no such file or directory
+```
+
+Occuring here:
+
+```go
+func (t *template) checkTemplateVM() error {
+	_, err := os.Stat(t.statePath + "/memory")
+	if err != nil {
+		return err
+	}
+
+	_, err = os.Stat(t.statePath + "/state")
+	return err
+}
+```
+
+## Problem 5: Apparently a brand new VM is being created because there is no call to restore
+
+Sandbox creation (from the template) succeeds, BUT IT DOESN'T LOOK LIKE TEMPLATE WAS USED. This is my hypothesis because:
+1. Time to create sandbox is almost as high as new one.
+2. There is no explicit call to VM Restore in the Cloud-Hypervisor clh.go or anywhere else. There is only `ResumeVM` function, and that too has an empty implementation in CLH.
+
+

@@ -81,6 +81,10 @@ func resetHypervisorConfig(config *vc.VMConfig) {
 	config.HypervisorConfig.SharedPath = ""
 	config.HypervisorConfig.VMStorePath = ""
 	config.HypervisorConfig.RunStorePath = ""
+	config.HypervisorConfig.SandboxName = ""
+	config.HypervisorConfig.SandboxNamespace = ""
+	// TODO: Check why DefaultMaxVCPUs needs to be reset.
+	config.HypervisorConfig.DefaultMaxVCPUs = 0
 }
 
 // It's important that baseConfig and newConfig are passed by value!
@@ -108,6 +112,8 @@ func (f *factory) checkConfig(config vc.VMConfig) error {
 
 // GetVM returns a working blank VM created by the factory.
 func (f *factory) GetVM(ctx context.Context, config vc.VMConfig) (*vc.VM, error) {
+	f.log().Info("HGDEBUG: GetVM called with config: ", config)
+
 	span, ctx := katatrace.Trace(ctx, f.log(), "GetVM", factoryTracingTags)
 	defer span.End()
 
