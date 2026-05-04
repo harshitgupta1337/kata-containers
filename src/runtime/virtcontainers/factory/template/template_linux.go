@@ -108,7 +108,11 @@ func (t *template) prepareTemplateFiles() error {
 		t.close()
 		return err
 	}
+
+	t.Logger().Infof("tmpfs mounted on %s with size %dM", t.statePath, t.config.HypervisorConfig.MemorySize+templateDeviceStateSize)
+
 	f, err := os.Create(t.statePath + "/memory")
+	t.Logger().Infof("memory file created at %s/memory. err = %v", t.statePath, err)
 	if err != nil {
 		t.close()
 		return err
@@ -125,6 +129,21 @@ func (t *template) createTemplateVM(ctx context.Context) error {
 	config.HypervisorConfig.BootFromTemplate = false
 	config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
 	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
+
+	// Workaround: Set static VMStorePath for template creation
+	templateVMStorePath := "/dev/shm/kata-template-vmstore"
+
+	// Remove existing directory if it exists
+	if err := os.RemoveAll(templateVMStorePath); err != nil {
+		return fmt.Errorf("failed to remove existing template vmstore directory: %v", err)
+	}
+
+	// Create the directory
+	if err := os.MkdirAll(templateVMStorePath, 0755); err != nil {
+		return fmt.Errorf("failed to create template vmstore directory: %v", err)
+	}
+
+	config.HypervisorConfig.VMStorePath = templateVMStorePath
 
 	vm, err := vc.NewVM(ctx, config)
 	if err != nil {

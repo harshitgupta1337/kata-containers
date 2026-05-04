@@ -53,6 +53,7 @@ func NewFactory(ctx context.Context, config Config, fetchOnly bool) (vc.Factory,
 					return nil, err
 				}
 			} else {
+				// This is where the template VM is created.
 				b, err = template.New(ctx, config.VMConfig, config.TemplatePath)
 				if err != nil {
 					return nil, err
