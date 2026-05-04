@@ -130,6 +130,10 @@ func (c *clhClientMock) VmRemoveDevicePut(ctx context.Context, vmRemoveDevice ch
 	return nil, nil
 }
 
+func (c *clhClientMock) VmRestorePut(ctx context.Context, restoreConfig chclient.RestoreConfig) (*http.Response, error) {
+	return nil, nil
+}
+
 func TestCloudHypervisorAddVSock(t *testing.T) {
 	assert := assert.New(t)
 	clh := cloudHypervisor{}
