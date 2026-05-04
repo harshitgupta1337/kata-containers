@@ -68,6 +68,7 @@ const (
 const (
 	clhStateCreated = "Created"
 	clhStateRunning = "Running"
+	clhStatePaused  = "Paused"
 )
 
 const (
@@ -118,6 +119,10 @@ type clhClient interface {
 	VmSnapshotPut(ctx context.Context, vmSnapshotConfig chclient.VmSnapshotConfig) (*http.Response, error)
 	// Remove a device from the VM
 	VmRemoveDevicePut(ctx context.Context, vmRemoveDevice chclient.VmRemoveDevice) (*http.Response, error)
+	// Restore VM from a snapshot
+	VmRestorePut(ctx context.Context, restoreConfig chclient.RestoreConfig) (*http.Response, error)
+	// Resume a paused VM
+	ResumeVM(ctx context.Context) (*http.Response, error)
 }
 
 type clhClientApi struct {
@@ -167,6 +172,14 @@ func (c *clhClientApi) VmSnapshotPut(ctx context.Context, vmSnapshotConfig chcli
 
 func (c *clhClientApi) VmRemoveDevicePut(ctx context.Context, vmRemoveDevice chclient.VmRemoveDevice) (*http.Response, error) {
 	return c.ApiInternal.VmRemoveDevicePut(ctx).VmRemoveDevice(vmRemoveDevice).Execute()
+}
+
+func (c *clhClientApi) VmRestorePut(ctx context.Context, restoreConfig chclient.RestoreConfig) (*http.Response, error) {
+	return c.ApiInternal.VmRestorePut(ctx).RestoreConfig(restoreConfig).Execute()
+}
+
+func (c *clhClientApi) ResumeVM(ctx context.Context) (*http.Response, error) {
+	return c.ApiInternal.ResumeVM(ctx).Execute()
 }
 
 // This is done in order to be able to override such a function as part of
@@ -1338,6 +1351,17 @@ func (clh *cloudHypervisor) SaveVM() error {
 
 func (clh *cloudHypervisor) ResumeVM(ctx context.Context) error {
 	clh.Logger().WithField("function", "ResumeVM").Info("Resume Sandbox")
+
+	cl := clh.client()
+	ctx, cancel := context.WithTimeout(ctx, clh.getClhAPITimeout()*time.Second)
+	defer cancel()
+
+	_, err := cl.ResumeVM(ctx)
+	if err != nil {
+		clh.Logger().WithError(err).Error("Failed to resume VM")
+		return openAPIClientError(err)
+	}
+
 	return nil
 }
 
@@ -1779,6 +1803,56 @@ func (clh *cloudHypervisor) bootVM(ctx context.Context) error {
 		return fmt.Errorf("VM state is not 'Running' after 'BootVM'")
 	}
 
+	return nil
+}
+
+func (clh *cloudHypervisor) restoreVM(ctx context.Context) error {
+	clh.Logger().Info("Restoring VM from template")
+
+	cl := clh.client()
+
+	// use the VMStorePath as the base for the restore source URL
+	snapshotDir := clh.config.VMStorePath
+
+	// check if the snapshot directory contains the state.json and config.json files
+	// which contain the VM state and configuration respectively
+	stateFile := filepath.Join(snapshotDir, "state.json")
+	configFile := filepath.Join(snapshotDir, "config.json")
+
+	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+		return fmt.Errorf("state file %s does not exist", stateFile)
+	}
+
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		return fmt.Errorf("config file %s does not exist", configFile)
+	}
+
+	// Prepare restore configuration
+	sourceURL := "file://" + snapshotDir
+	restoreConfig := *chclient.NewRestoreConfig(sourceURL)
+
+	clh.Logger().WithField("sourceURL", sourceURL).Debug("Restore configuration")
+
+	// Restore VM from template
+	_, err := cl.VmRestorePut(ctx, restoreConfig)
+	if err != nil {
+		clh.Logger().WithError(err).Error("Failed to restore VM from template")
+		return openAPIClientError(err)
+	}
+
+	// Check VM state after restoration
+	info, err := clh.vmInfo()
+	if err != nil {
+		return err
+	}
+
+	clh.Logger().Debugf("VM state after restore: %#v", info)
+
+	if info.State != clhStatePaused {
+		clh.Logger().Warnf("VM state is '%s' after restore, expected 'Paused'", info.State)
+	}
+
+	clh.Logger().Info("Successfully restored VM from template")
 	return nil
 }
 
