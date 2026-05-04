@@ -119,16 +119,14 @@ func (t *template) prepareTemplateFiles() error {
 	}
 	f.Close()
 
-	return nil
-}
-
-func (t *template) createTemplateVM(ctx context.Context) error {
-	// create the template vm
-	config := t.config
-	config.HypervisorConfig.BootToBeTemplate = true
-	config.HypervisorConfig.BootFromTemplate = false
-	config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
-	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
+	// truncate the memory file to the exact size of the VM memory
+	memoryInBytes := int64(t.config.HypervisorConfig.MemorySize) * 1024 * 1024
+	t.Logger().Infof("truncating memory file %s to %d bytes", t.statePath+"/memory", memoryInBytes)
+	err = os.Truncate(t.statePath+"/memory", memoryInBytes)
+	if err != nil {
+		t.close()
+		return err
+	}
 
 	// Workaround: Set static VMStorePath for template creation
 	templateVMStorePath := "/dev/shm/kata-template-vmstore"
@@ -143,7 +141,18 @@ func (t *template) createTemplateVM(ctx context.Context) error {
 		return fmt.Errorf("failed to create template vmstore directory: %v", err)
 	}
 
-	config.HypervisorConfig.VMStorePath = templateVMStorePath
+	t.config.HypervisorConfig.VMStorePath = templateVMStorePath
+	t.config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
+	t.config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
+
+	return nil
+}
+
+func (t *template) createTemplateVM(ctx context.Context) error {
+	// create the template vm
+	config := t.config
+	config.HypervisorConfig.BootToBeTemplate = true
+	config.HypervisorConfig.BootFromTemplate = false
 
 	vm, err := vc.NewVM(ctx, config)
 	if err != nil {

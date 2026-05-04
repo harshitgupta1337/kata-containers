@@ -1321,8 +1321,9 @@ func (clh *cloudHypervisor) SaveVM() error {
 	defer cancel()
 
 	// Create snapshot config with file URL to template path
-	// Use VMStorePath as base for snapshot destination
-	fileURL := "file://" + clh.config.VMStorePath
+	// Use the directory containing the MemoryPath as base for snapshot destination
+	snapshotDir := filepath.Dir(clh.config.MemoryPath)
+	fileURL := "file://" + snapshotDir
 
 	vmSnapshotConfig := *chclient.NewVmSnapshotConfig()
 	vmSnapshotConfig.SetDestinationUrl(fileURL)
