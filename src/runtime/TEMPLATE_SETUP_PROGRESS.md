@@ -65,3 +65,50 @@ The missing directory path in `hvsock:/clh.sock` is **intentional but problemati
 Template VMs are meant to be path-agnostic, but the agent communication still needs working socket paths. The template creation process clears storage paths but the agent socket generation still depends on them.
 
 **This explains why the connection times out** - the runtime is looking for a socket at just "clh.sock" relative to its working directory, not at the actual full path where CLH created it.
+
+## New Challenge: Unimplemented VM State Management Functions
+
+After adding the VMStorePath workaround, template creation now proceeds further but encounters another critical issue:
+
+### Problem: Zero-Size Memory Files
+
+Template creation completes but the `memory` file in the template directory (`/run/vc/vm/template/memory`) has **size 0**, which is unexpected. This indicates that the VM state is not being properly saved during template creation.
+
+### Root Cause: Missing CLH Implementation
+
+The issue stems from unimplemented functions in `virtcontainers/clh.go`:
+
+- **`PauseVM()`**: Required to pause the VM before saving state
+- **`SaveVM()`**: Required to persist the VM memory and state to disk
+
+These functions are called during template creation in `template_linux.go`:
+
+```go
+func (t *template) createTemplateVM(ctx context.Context) error {
+    // ... VM creation ...
+    
+    if err = vm.Pause(ctx); err != nil {  // -> calls unimplemented PauseVM()
+        return err
+    }
+
+    if err = vm.Save(); err != nil {      // -> calls unimplemented SaveVM()
+        return err
+    }
+    
+    return nil
+}
+```
+
+### Impact:
+
+Without these implementations:
+1. VM state cannot be properly saved to the template
+2. Memory snapshots remain empty (0 bytes)
+3. Template-based VM creation will fail or produce unusable VMs
+
+### Next Steps:
+
+The `PauseVM()` and `SaveVM()` functions in `virtcontainers/clh.go` need to be implemented to enable proper CLH template functionality. This likely involves:
+- Using Cloud Hypervisor's snapshot/restore API
+- Implementing proper state serialization
+- Handling memory file persistence
