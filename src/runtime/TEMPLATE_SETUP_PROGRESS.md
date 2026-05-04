@@ -167,3 +167,15 @@ Sandbox creation (from the template) succeeds, BUT IT DOESN'T LOOK LIKE TEMPLATE
 2. There is no explicit call to VM Restore in the Cloud-Hypervisor clh.go or anywhere else. There is only `ResumeVM` function, and that too has an empty implementation in CLH.
 
 
+## Problem 6: Clone snapshot config into the `/run/vc/vm/<new-sandbox>` dir
+
+We need to create a new config customized for the new (clone) sandbox.
+
+
+## Problem 7: ResumeVM being called twice causes error
+
+These are the 2 places where it is called:
+1. Another inside restoreVM function in clh.go
+2. vm.Resume(ctx) in factory/factory_linux.go: This is called as part of the GetVM function, which is part of the template workflow.
+
+Out of these 2, the 1st one was erroneously added before. Removed it.
