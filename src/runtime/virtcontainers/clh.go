@@ -753,6 +753,7 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 	// Check if we should restore from template instead of creating new VM
 	if clh.config.BootFromTemplate && clh.shouldRestoreFromTemplate() {
 		clh.Logger().Info("Template files found, will restore VM instead of creating new")
+
 		// Mark this as a restore operation for StartVM to use ResumeVM instead
 		clh.state.isRestoring = true
 		return nil
@@ -787,6 +788,65 @@ func (clh *cloudHypervisor) shouldRestoreFromTemplate() bool {
 	}).Info("Template files found, can restore VM from template")
 
 	return true
+}
+
+// copyFile copies a file from src to dst
+func (clh *cloudHypervisor) copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return err
+	}
+
+	return dstFile.Sync()
+}
+
+// updateVsockSocketPath updates the vsock socket path in the config.json file
+func (clh *cloudHypervisor) updateVsockSocketPath(configPath, vmID string) error {
+	// Read the config file
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(configData, &config); err != nil {
+		return err
+	}
+
+	// Update vsock socket path if vsock exists
+	if vsock, ok := config["vsock"].(map[string]interface{}); ok {
+		// Generate new vsock socket path for this VM
+		newVsockPath, err := clh.vsockSocketPath(vmID)
+		if err != nil {
+			return err
+		}
+		vsock["socket"] = newVsockPath
+
+		clh.Logger().WithFields(log.Fields{
+			"vmID":         vmID,
+			"newVsockPath": newVsockPath,
+		}).Debug("Updated vsock socket path in config.json")
+	}
+
+	// Write the updated config back to file
+	updatedConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, updatedConfig, 0644)
 }
 
 // setupInitdata prepares and attaches the initdata disk if present.
@@ -859,6 +919,31 @@ func (clh *cloudHypervisor) StartVM(ctx context.Context, timeout int) error {
 
 	// Check if we should restore from template or create new VM
 	if clh.state.isRestoring {
+		// vmPath := filepath.Join(clh.config.VMStorePath, clh.id)
+		// The vmPath points to the dir contanining the files for this new VM
+
+		// Copy template files to VM directory
+		snapshotDir := filepath.Dir(clh.config.MemoryPath)
+
+		// Copy config.json from template to VM directory
+		srcConfig := filepath.Join(snapshotDir, "config.json")
+		dstConfig := filepath.Join(vmPath, "config.json")
+		if err := clh.copyFile(srcConfig, dstConfig); err != nil {
+			return fmt.Errorf("failed to copy config.json: %v", err)
+		}
+
+		// Copy state.json from template to VM directory
+		srcState := filepath.Join(snapshotDir, "state.json")
+		dstState := filepath.Join(vmPath, "state.json")
+		if err := clh.copyFile(srcState, dstState); err != nil {
+			return fmt.Errorf("failed to copy state.json: %v", err)
+		}
+
+		// Update vsock socket path in the copied config.json
+		if err := clh.updateVsockSocketPath(dstConfig, clh.id); err != nil {
+			return fmt.Errorf("failed to update vsock socket path: %v", err)
+		}
+
 		if err := clh.restoreVM(ctx); err != nil {
 			return err
 		}
@@ -1920,8 +2005,7 @@ func (clh *cloudHypervisor) restoreVM(ctx context.Context) error {
 	cl := clh.client()
 
 	// Prepare restore configuration
-	snapshotDir := filepath.Dir(clh.config.MemoryPath)
-	sourceURL := "file://" + snapshotDir
+	sourceURL := "file://" + filepath.Join(clh.config.VMStorePath, clh.id)
 
 	restoreConfig := *chclient.NewRestoreConfig(sourceURL)
 	// Optionally set prefault if needed for performance
