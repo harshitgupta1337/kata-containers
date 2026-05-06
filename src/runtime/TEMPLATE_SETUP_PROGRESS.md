@@ -179,3 +179,6 @@ These are the 2 places where it is called:
 2. vm.Resume(ctx) in factory/factory_linux.go: This is called as part of the GetVM function, which is part of the template workflow.
 
 Out of these 2, the 1st one was erroneously added before. Removed it.
+
+## Problem 8: Performance due to Template is not good. RunP still takes about 700-700ms
+

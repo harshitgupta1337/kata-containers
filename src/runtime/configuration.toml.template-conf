@@ -395,7 +395,7 @@ disable_guest_seccomp=true
 # If enabled, the runtime will create opentracing.io traces and spans.
 # (See https://www.jaegertracing.io/docs/getting-started).
 # (default: disabled)
-#enable_tracing = true
+enable_tracing = true
 
 # Set the full url to the Jaeger HTTP Thrift collector.
 # The default if not set will be "http://localhost:14268/api/traces"
