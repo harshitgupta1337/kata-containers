@@ -616,9 +616,13 @@ func (k *kataAgent) updateInterface(ctx context.Context, ifc *pbTypes.Interface)
 	// hasn't ready in guest, thus it's better to retry on this operation to
 	// wait until the device ready in guest.
 
+	startTime := time.Now().UnixMilli()
+
 	var resultingInterface interface{}
 
 	err := retry.Do(func() error {
+		timeNow := time.Now().UnixMilli()
+		k.Logger().WithField("time", timeNow-startTime).Infof("HGDEBUG_NETSETUP: Attempt to update interface")
 		if resInterface, nerr := k.sendReq(ctx, ifcReq); nerr != nil {
 			errMsg := nerr.Error()
 			if !strings.Contains(errMsg, "Link not found") {
@@ -631,7 +635,6 @@ func (k *kataAgent) updateInterface(ctx context.Context, ifc *pbTypes.Interface)
 			return nil
 		}
 	},
-
 		retry.Attempts(20),
 		retry.LastErrorOnly(true),
 		retry.Delay(20*time.Millisecond))
@@ -1312,6 +1315,8 @@ func (k *kataAgent) setupNetworks(ctx context.Context, sandbox *Sandbox, c *Cont
 		return nil
 	}
 
+	startTime := time.Now().UnixMilli()
+
 	var err error
 	var endpoints []Endpoint
 	if c == nil || c.id == sandbox.id {
@@ -1346,6 +1351,11 @@ func (k *kataAgent) setupNetworks(ctx context.Context, sandbox *Sandbox, c *Cont
 		}()
 	}
 
+	timeNow := time.Now().UnixMilli()
+	k.Logger().WithFields(logrus.Fields{
+		"elapsed-time-ms": timeNow - startTime,
+	}).Info("HGDEBUG_NETSETUP: Calculated endpoints")
+
 	if len(endpoints) == 0 {
 		return nil
 	}
@@ -1354,16 +1364,36 @@ func (k *kataAgent) setupNetworks(ctx context.Context, sandbox *Sandbox, c *Cont
 	if err != nil {
 		return err
 	}
+	prevTime := timeNow
+	timeNow = time.Now().UnixMilli()
+	k.Logger().WithFields(logrus.Fields{
+		"elapsed-time-ms": timeNow - prevTime,
+	}).Info("HGDEBUG_NETSETUP: generated VC network structures")
 
 	if err = k.updateInterfaces(ctx, interfaces); err != nil {
 		return err
 	}
+	prevTime = timeNow
+	timeNow = time.Now().UnixMilli()
+	k.Logger().WithFields(logrus.Fields{
+		"elapsed-time-ms": timeNow - prevTime,
+	}).Info("HGDEBUG_NETSETUP: updated interfaces")
 	if _, err = k.updateRoutes(ctx, routes); err != nil {
 		return err
 	}
+	prevTime = timeNow
+	timeNow = time.Now().UnixMilli()
+	k.Logger().WithFields(logrus.Fields{
+		"elapsed-time-ms": timeNow - prevTime,
+	}).Info("HGDEBUG_NETSETUP: updated routes")
 	if err = k.addARPNeighbors(ctx, neighs); err != nil {
 		return err
 	}
+	prevTime = timeNow
+	timeNow = time.Now().UnixMilli()
+	k.Logger().WithFields(logrus.Fields{
+		"elapsed-time-ms": timeNow - prevTime,
+	}).Info("HGDEBUG_NETSETUP: updated ARP neighbors")
 
 	return nil
 }

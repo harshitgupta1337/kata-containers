@@ -108,12 +108,42 @@ func (t *template) prepareTemplateFiles() error {
 		t.close()
 		return err
 	}
+
+	t.Logger().Infof("tmpfs mounted on %s with size %dM", t.statePath, t.config.HypervisorConfig.MemorySize+templateDeviceStateSize)
+
 	f, err := os.Create(t.statePath + "/memory")
+	t.Logger().Infof("memory file created at %s/memory. err = %v", t.statePath, err)
 	if err != nil {
 		t.close()
 		return err
 	}
 	f.Close()
+
+	// truncate the memory file to the exact size of the VM memory
+	memoryInBytes := int64(t.config.HypervisorConfig.MemorySize) * 1024 * 1024
+	t.Logger().Infof("truncating memory file %s to %d bytes", t.statePath+"/memory", memoryInBytes)
+	err = os.Truncate(t.statePath+"/memory", memoryInBytes)
+	if err != nil {
+		t.close()
+		return err
+	}
+
+	// Workaround: Set static VMStorePath for template creation
+	templateVMStorePath := "/dev/shm/kata-template-vmstore"
+
+	// Remove existing directory if it exists
+	if err := os.RemoveAll(templateVMStorePath); err != nil {
+		return fmt.Errorf("failed to remove existing template vmstore directory: %v", err)
+	}
+
+	// Create the directory
+	if err := os.MkdirAll(templateVMStorePath, 0755); err != nil {
+		return fmt.Errorf("failed to create template vmstore directory: %v", err)
+	}
+
+	t.config.HypervisorConfig.VMStorePath = templateVMStorePath
+	t.config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
+	t.config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
 
 	return nil
 }
@@ -123,8 +153,6 @@ func (t *template) createTemplateVM(ctx context.Context) error {
 	config := t.config
 	config.HypervisorConfig.BootToBeTemplate = true
 	config.HypervisorConfig.BootFromTemplate = false
-	config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
-	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
 
 	vm, err := vc.NewVM(ctx, config)
 	if err != nil {
@@ -161,7 +189,7 @@ func (t *template) createFromTemplateVM(ctx context.Context, c vc.VMConfig) (*vc
 	config.HypervisorConfig.BootToBeTemplate = false
 	config.HypervisorConfig.BootFromTemplate = true
 	config.HypervisorConfig.MemoryPath = t.statePath + "/memory"
-	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state"
+	config.HypervisorConfig.DevicesStatePath = t.statePath + "/state.json"
 	config.HypervisorConfig.SharedPath = c.HypervisorConfig.SharedPath
 	config.HypervisorConfig.VMStorePath = c.HypervisorConfig.VMStorePath
 	config.HypervisorConfig.RunStorePath = c.HypervisorConfig.RunStorePath
@@ -175,6 +203,9 @@ func (t *template) checkTemplateVM() error {
 		return err
 	}
 
-	_, err = os.Stat(t.statePath + "/state")
+	// TODO:the filename state.json is hardcoded.
+	// It is only state.json with CLH. With QEMU is should be state.
+	// Therefore, we need to make this configurable.
+	_, err = os.Stat(t.statePath + "/state.json")
 	return err
 }

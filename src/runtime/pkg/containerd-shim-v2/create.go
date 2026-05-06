@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	containerd_types "github.com/containerd/containerd/api/types"
@@ -74,6 +75,10 @@ func copyLayersToMounts(rootFs *virtcontainers.RootFs, spec *specs.Spec) error {
 }
 
 func create(ctx context.Context, s *service, r *taskAPI.CreateTaskRequest) (*container, error) {
+	// Collect current time in milliseconds here using Go utils
+	// to calculate the time taken by the create function.
+	startTime := time.Now().UnixMilli()
+
 	rootFs := virtcontainers.RootFs{}
 	if len(r.Rootfs) == 1 {
 		m := r.Rootfs[0]
@@ -105,6 +110,10 @@ func create(ctx context.Context, s *service, r *taskAPI.CreateTaskRequest) (*con
 	if err != nil {
 		return nil, err
 	}
+
+	endTime := time.Now().UnixMilli()
+
+	shimLog.Infof("HGDEBUG_TIME, time taken in create() fn before switch: %d ms", endTime-startTime)
 
 	switch containerType {
 	case virtcontainers.PodSandbox, virtcontainers.SingleContainer:
