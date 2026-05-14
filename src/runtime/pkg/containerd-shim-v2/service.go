@@ -31,6 +31,7 @@ import (
 	vc "github.com/kata-containers/kata-containers/src/runtime/virtcontainers"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/compatoci"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
+	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -212,6 +213,41 @@ func setupMntNs() error {
 	return nil
 }
 
+func ensureTemplatePathMounted() error {
+	configPath := os.Getenv("KATA_CONF_FILE")
+	_, runtimeConfig, err := katautils.LoadConfiguration(configPath, true)
+	if err != nil {
+		return errors.Wrap(err, "load runtime configuration")
+	}
+
+	templatePath := runtimeConfig.FactoryConfig.TemplatePath
+	if templatePath == "" {
+		return fmt.Errorf("template path is empty in runtime configuration")
+	}
+
+	if err := os.MkdirAll(templatePath, 0700); err != nil {
+		return err
+	}
+
+	mounted, err := mountinfo.Mounted(templatePath)
+	if err != nil {
+		return err
+	}
+	if mounted {
+		return nil
+	}
+
+	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV)
+	if err := unix.Mount("tmpfs", templatePath, "tmpfs", flags, ""); err != nil {
+		if err == syscall.EBUSY {
+			return nil
+		}
+		return fmt.Errorf("failed to mount tmpfs on %s: %w", templatePath, err)
+	}
+
+	return nil
+}
+
 // StartShim is a binary call that starts a kata shimv2 service which will
 // implement the ShimV2 APIs such as create/start/update etc containers.
 func (s *service) StartShim(ctx context.Context, opts cdshim.StartOpts) (_ string, retErr error) {
@@ -268,6 +304,10 @@ func (s *service) StartShim(ctx context.Context, opts cdshim.StartOpts) (_ strin
 	}
 
 	cmd.ExtraFiles = append(cmd.ExtraFiles, f)
+
+	if err := ensureTemplatePathMounted(); err != nil {
+		return "", err
+	}
 
 	goruntime.LockOSThread()
 	if os.Getenv("SCHED_CORE") != "" {

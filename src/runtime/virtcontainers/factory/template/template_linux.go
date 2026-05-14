@@ -18,6 +18,7 @@ import (
 	pb "github.com/kata-containers/kata-containers/src/runtime/protocols/cache"
 	vc "github.com/kata-containers/kata-containers/src/runtime/virtcontainers"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/factory/base"
+	"github.com/moby/sys/mountinfo"
 )
 
 type template struct {
@@ -88,13 +89,9 @@ func (t *template) GetVMStatus() []*pb.GrpcVMStatus {
 }
 
 func (t *template) close() {
-	if err := syscall.Unmount(t.statePath, syscall.MNT_DETACH); err != nil {
-		t.Logger().WithError(err).Errorf("failed to unmount %s", t.statePath)
-	}
 
-	if err := os.RemoveAll(t.statePath); err != nil {
-		t.Logger().WithError(err).Errorf("failed to remove %s", t.statePath)
-	}
+	t.Logger().Infof("closing template VM at %s", t.statePath)
+	t.Logger().Debugf("skipping cleanup for shared template path %s", t.statePath)
 }
 
 func (t *template) prepareTemplateFiles() error {
@@ -103,15 +100,25 @@ func (t *template) prepareTemplateFiles() error {
 	if err != nil {
 		return err
 	}
-	flags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV)
-	opts := fmt.Sprintf("size=%dM", t.config.HypervisorConfig.MemorySize+templateDeviceStateSize)
-	if err = syscall.Mount("tmpfs", t.statePath, "tmpfs", flags, opts); err != nil {
-		t.close()
+
+	mounted, err := mountinfo.Mounted(t.statePath)
+	if err != nil {
 		return err
 	}
+
+	if !mounted {
+		flags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV)
+		opts := fmt.Sprintf("size=%dM", t.config.HypervisorConfig.MemorySize+templateDeviceStateSize)
+		if err = syscall.Mount("tmpfs", t.statePath, "tmpfs", flags, opts); err != nil {
+			if err != syscall.EBUSY {
+				t.Logger().Errorf("failed to mount tmpfs on %s: %v", t.statePath, err)
+				return err
+			}
+		}
+	}
+
 	f, err := os.Create(t.statePath + "/memory")
 	if err != nil {
-		t.close()
 		return err
 	}
 	f.Close()
@@ -121,7 +128,6 @@ func (t *template) prepareTemplateFiles() error {
 	t.Logger().Infof("truncating memory file %s to %d bytes", t.statePath+"/memory", memoryInBytes)
 	err = os.Truncate(t.statePath+"/memory", memoryInBytes)
 	if err != nil {
-		t.close()
 		return err
 	}
 

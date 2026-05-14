@@ -933,6 +933,8 @@ func (clh *cloudHypervisor) StartVM(ctx context.Context, timeout int) error {
 		dstConfig := filepath.Join(vmPath, "config.json")
 		if err := clh.copyFile(srcConfig, dstConfig); err != nil {
 			return fmt.Errorf("failed to copy config.json: %v", err)
+		} else {
+			clh.Logger().Infof("config.json copied from %s to %s", srcConfig, dstConfig)
 		}
 
 		// Copy state.json from template to VM directory
@@ -940,6 +942,8 @@ func (clh *cloudHypervisor) StartVM(ctx context.Context, timeout int) error {
 		dstState := filepath.Join(vmPath, "state.json")
 		if err := clh.copyFile(srcState, dstState); err != nil {
 			return fmt.Errorf("failed to copy state.json: %v", err)
+		} else {
+			clh.Logger().Infof("state.json copied from %s to %s", srcState, dstState)
 		}
 
 		// Update vsock socket path in the copied config.json
@@ -1502,6 +1506,18 @@ func (clh *cloudHypervisor) SaveVM() error {
 	if err != nil {
 		clh.Logger().WithError(err).Error("Failed to save VM snapshot")
 		return openAPIClientError(err)
+	}
+
+	clh.Logger().Debug("VM snapshot saved successfully at " + snapshotDir)
+	// List the contents of snapshotDir to verify that the snapshot files are present
+	files, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		clh.Logger().WithError(err).Error("Failed to read snapshot directory")
+		return err
+	}
+
+	for _, file := range files {
+		clh.Logger().Debugf("Snapshot file: %s", file.Name())
 	}
 
 	if clh.config.BootToBeTemplate {
